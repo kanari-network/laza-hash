@@ -8,7 +8,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 const BLOCK_SIZE: usize = 128;
 // Increase rounds significantly
 const ROUNDS: usize = 48; // Increased from 12
-const MEMORY_SIZE: usize = 40000; // 4 memory hard requirement
+const MEMORY_SIZE: usize = 1024 * 1024; // 1 MB memory size
 
 const LAZA_IV: [u32; 32] = [
     0x61707865, 0x3320646E, 0x79622D32, 0x6B206574, 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
@@ -17,9 +17,9 @@ const LAZA_IV: [u32; 32] = [
     0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC, 0xD6D0E7F7, 0xA5D39983, 0x8C6F5171, 0x4A46D1B0,
 ];
 
-const STATE_SIZE: usize = 32; // Increased from 16
+const STATE_SIZE: usize = 32; // Increased from 32
 const SALT_SIZE: usize = 32;
-const KEY_SIZE: usize = 16; // Increased from 8
+const KEY_SIZE: usize = 16; // Increased from 16
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct LazaHasher {
@@ -49,25 +49,6 @@ const DOMAIN_HASH: u32 = 0x01;
 const DOMAIN_KEYED: u32 = 0x02;
 
 impl LazaHasher {
-
-    pub fn new_dyn(rounds: usize, memory_size: Option<usize>) -> Self {
-        let mem_size = memory_size.unwrap_or_else(|| {
-            std::env::var("LAZA_MEMORY_SIZE")
-                .ok()
-                .and_then(|val| val.parse().ok())
-                .unwrap_or(MEMORY_SIZE)
-        });
-
-        Self {
-            state: LAZA_IV,
-            buffer: Vec::with_capacity(BLOCK_SIZE),
-            counter: 0,
-            salt: [0u8; SALT_SIZE],
-            rounds,
-            key: [0u32; KEY_SIZE],
-            is_keyed: false, 
-        }
-    }
 
     fn memory_hard_mix(&mut self) {
         // Create large memory buffer
@@ -525,4 +506,5 @@ mod tests {
             println!("{:9} | {:11.1}", size, time_per_op);
         }
     }
+  
 }
