@@ -1,10 +1,10 @@
 [package]
 name = "laza"
 edition = "2024"
-# categories = ["cryptography", "security"]
+categories = ["cryptography", "security"]
 homepage = "https://kanari.network"
 documentation = "https://docs.rs/laza"
-version = "0.1.0"
+version = "0.1.2"
 authors = ["Kanari Network"]
 license = "Apache-2.0"
 repository = "https://github.com/kanari-network/laza-hash"
@@ -12,7 +12,7 @@ description = "Kanari Network Cryptographic Hashing Library"
 
 [features]
 default = ["parallel"]  # Enable parallel by default
-simd = []
+simd = [] # Add SIMD feature flag
 parallel = ["rayon"]
 
 [dependencies]
