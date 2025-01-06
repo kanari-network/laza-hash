@@ -1,36 +1,26 @@
 use rand::{Rng, thread_rng};
-use std::hash::Hasher;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
+use std::hash::Hasher;
+use std::num::Wrapping;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const LAZA_VERSION: &str = "1.0.0";
 const BLOCK_SIZE: usize = 128;
-const ROUNDS: usize = 12;
+// Increase rounds significantly
+const ROUNDS: usize = 48; // Increased from 12
+const MEMORY_SIZE: usize = 1024 * 1024; // 1MB memory hard requirement
 
 const LAZA_IV: [u32; 32] = [
-    
-    0x61707865, 0x3320646E, 0x79622D32, 0x6B206574,
-    
-    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-    
-    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-    
-    0x9E3779B9, 0x243F6A88, 0xB7E15162, 0x71374491,
-    
-    0xF1234567, 0xE89ABCDF, 0xD6789ABC, 0xC4567DEF,
-    
-    0x7FFFFFFF, 0x1FFFFFFF, 0x0FFFFFFF, 0x07FFFFFF,
-    
-    0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC,
-    
-    0xD6D0E7F7, 0xA5D39983, 0x8C6F5171, 0x4A46D1B0
+    0x61707865, 0x3320646E, 0x79622D32, 0x6B206574, 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
+    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x9E3779B9, 0x243F6A88, 0xB7E15162, 0x71374491,
+    0xF1234567, 0xE89ABCDF, 0xD6789ABC, 0xC4567DEF, 0x7FFFFFFF, 0x1FFFFFFF, 0x0FFFFFFF, 0x07FFFFFF,
+    0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC, 0xD6D0E7F7, 0xA5D39983, 0x8C6F5171, 0x4A46D1B0,
 ];
 
-const STATE_SIZE: usize = 32;  // Increased from 16
+const STATE_SIZE: usize = 32; // Increased from 16
 const SALT_SIZE: usize = 32;
-const KEY_SIZE: usize = 16;    // Increased from 8
-
+const KEY_SIZE: usize = 16; // Increased from 8
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct LazaHasher {
@@ -60,7 +50,71 @@ const DOMAIN_HASH: u32 = 0x01;
 const DOMAIN_KEYED: u32 = 0x02;
 
 impl LazaHasher {
+    fn memory_hard_mix(&mut self) {
+        // Create large memory buffer
+        let mut memory = vec![0u32; MEMORY_SIZE];
+
+        // Initialize with state-dependent values
+        for i in 0..MEMORY_SIZE {
+            memory[i] = self.state[i % STATE_SIZE]
+                .wrapping_mul(0x9e3779b9)
+                .rotate_right((i % 32) as u32);
+        }
+
+        // Memory-hard mixing
+        for i in 0..MEMORY_SIZE {
+            let idx1 = memory[i] as usize % MEMORY_SIZE;
+            let idx2 = memory[idx1] as usize % MEMORY_SIZE;
+
+            // Sequential dependency
+            memory[i] = memory[i]
+                .wrapping_mul(memory[idx1])
+                .rotate_right(7)
+                .wrapping_add(memory[idx2]);
+
+            // Cache-unfriendly access pattern
+            let jump = (memory[i] % 256) as usize + 1;
+            // Cache-unfriendly access patterns
+            let far_idx = (i + jump * 1024) % MEMORY_SIZE;
+            memory[i] = memory[i].wrapping_add(memory[far_idx]);
+
+            // Modular arithmetic
+            let a = Wrapping(memory[i]);
+            let b = Wrapping(0xfffffffbu32);
+            memory[i] = (a * b * b).0;
+        }
+
+        // Mix back into state
+        for i in 0..STATE_SIZE {
+            let mut acc = 0u32;
+            for j in 0..(MEMORY_SIZE / STATE_SIZE) {
+                acc = acc
+                    .wrapping_add(memory[i + j * STATE_SIZE])
+                    .rotate_right(11);
+            }
+            self.state[i] ^= acc;
+        }
+
+        // Secure cleanup
+        memory.zeroize();
+    }
+
     fn compress(&mut self) {
+        // Pre-allocate working state
+        let mut working_state = [0u32; STATE_SIZE];
+
+        // Use copy_from_slice for faster array copying
+        working_state.copy_from_slice(&self.state);
+
+        // Use iterators and collect for vectorization
+        self.state
+            .iter_mut()
+            .zip(working_state.iter())
+            .for_each(|(s, w)| *s = s.wrapping_add(*w));
+
+        // Add memory-hard mixing step
+        self.memory_hard_mix();
+
         let mut working_state = self.state;
 
         // Enhanced domain separation with better mixing
@@ -145,7 +199,7 @@ impl LazaHasher {
         let mut salt = [0u8; SALT_SIZE];
         thread_rng().fill(&mut salt);
         Self {
-            state: LAZA_IV,  // Now matches 32-word size
+            state: LAZA_IV, // Now matches 32-word size
             buffer: Vec::with_capacity(BLOCK_SIZE),
             counter: 0,
             salt,
@@ -232,40 +286,41 @@ pub fn add_vectors_simd(a: &[f32], b: &[f32]) -> Vec<f32> {
 #[target_feature(enable = "avx2")]
 unsafe fn add_vectors_avx2(a: &[f32], b: &[f32]) -> Vec<f32> {
     let mut result = Vec::with_capacity(a.len());
-    
+
     for (a_chunk, b_chunk) in a.chunks(8).zip(b.chunks(8)) {
         unsafe {
             let a_vec = _mm256_loadu_ps(a_chunk.as_ptr());
             let b_vec = _mm256_loadu_ps(b_chunk.as_ptr());
             let sum = _mm256_add_ps(a_vec, b_vec);
-            
+
             let mut temp = [0.0f32; 8];
             _mm256_storeu_ps(temp.as_mut_ptr(), sum);
             result.extend_from_slice(&temp[..a_chunk.len()]);
         }
     }
-    
+
     result
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use criterion::black_box;
-    use sha2::{Sha256, Digest};
-    use std::time::Instant;
     use blake3::Hasher as Blake3Hasher;
-    use std::sync::Arc;
+    use criterion::black_box;
     #[cfg(feature = "parallel")]
     use rayon::prelude::*;
+    use sha2::{Digest, Sha256};
+    use std::sync::Arc;
     use std::thread;
+    use std::time::Instant;
 
     type HashFn = fn(&[u8]) -> Vec<u8>;
 
     #[test]
     fn benchmark_hashers() {
-        let thread_count = thread::available_parallelism().map(|p| p.get()).unwrap_or(1);
+        let thread_count = thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1);
         let sizes = [1, 16, 64, 256, 1024];
         let iterations = 10000 * thread_count;
         let batch_size = 100;
@@ -284,10 +339,17 @@ mod tests {
         };
 
         let blake3_hash: HashFn = |data| {
-            Blake3Hasher::new().update(data).finalize().as_bytes().to_vec()
+            Blake3Hasher::new()
+                .update(data)
+                .finalize()
+                .as_bytes()
+                .to_vec()
         };
 
-        println!("\nOptimized Performance Benchmark (threads: {})", thread_count);
+        println!(
+            "\nOptimized Performance Benchmark (threads: {})",
+            thread_count
+        );
         println!("==============================================");
         println!("Data Size | LAZA (MB/s) | SHA256 (MB/s) | BLAKE3 (MB/s) | vs SHA256 | vs BLAKE3");
         println!("---------+-------------+--------------+--------------+----------+---------");
@@ -295,11 +357,11 @@ mod tests {
         for &size_kb in &sizes {
             let size = size_kb * 1024;
             let data = Arc::new(vec![0x5au8; size]);
-            
+
             let bench = |f: HashFn| -> f64 {
                 let data = Arc::clone(&data);
                 let start = Instant::now();
-                (0..iterations/batch_size).into_par_iter().for_each(|_| {
+                (0..iterations / batch_size).into_par_iter().for_each(|_| {
                     for _ in 0..batch_size {
                         black_box(f(&data));
                     }
@@ -312,17 +374,24 @@ mod tests {
             let sha256 = bench(sha256_hash);
             let blake3 = bench(blake3_hash);
 
-            println!("{:6} KB | {:9.2} | {:10.2} | {:10.2} | {:8.2}x | {:7.2}x",
-                    size_kb, laza, sha256, blake3,
-                    laza / sha256, laza / blake3);
+            println!(
+                "{:6} KB | {:9.2} | {:10.2} | {:10.2} | {:8.2}x | {:7.2}x",
+                size_kb,
+                laza,
+                sha256,
+                blake3,
+                laza / sha256,
+                laza / blake3
+            );
         }
     }
-
 
     #[test]
     fn benchmark_laza() {
         // Thread pool setup
-        let threads = thread::available_parallelism().map(|p| p.get()).unwrap_or(1);
+        let threads = thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1);
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build_global()
@@ -354,7 +423,7 @@ mod tests {
 
             for _ in 0..runs {
                 let start = Instant::now();
-                (0..iterations/batch_size).into_par_iter().for_each(|_| {
+                (0..iterations / batch_size).into_par_iter().for_each(|_| {
                     let data = Arc::clone(&data);
                     for _ in 0..batch_size {
                         let mut hasher = LazaHasher::new();
@@ -363,18 +432,78 @@ mod tests {
                     }
                 });
                 let elapsed = start.elapsed();
-                let throughput = (size as f64 * iterations as f64) / 
-                               (1024.0 * 1024.0 * 1024.0 * elapsed.as_secs_f64());
+                let throughput = (size as f64 * iterations as f64)
+                    / (1024.0 * 1024.0 * 1024.0 * elapsed.as_secs_f64());
                 results.push(throughput);
             }
 
             results.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let median = results[runs/2];
-            let stddev = (results.iter()
-                         .map(|x| (x - median).powi(2))
-                         .sum::<f64>() / runs as f64).sqrt();
+            let median = results[runs / 2];
+            let stddev =
+                (results.iter().map(|x| (x - median).powi(2)).sum::<f64>() / runs as f64).sqrt();
 
             println!("{:6} KB | {:14.2} | {:.3}", size_kb, median, stddev);
+        }
+    }
+
+    #[test]
+    fn test_simd_performance() {
+        if !is_x86_feature_detected!("avx2") {
+            return; // Skip test if AVX2 not available
+        }
+
+        let sizes = [4096, 8192, 16384, 32768];
+        let iterations = 1000;
+
+        println!("\nSIMD Performance Test");
+        println!("====================");
+        println!("Size (KB) | Throughput (GB/s)");
+
+        for &size in &sizes {
+            let data = Arc::new(vec![0x5au8; size]);
+            let start = Instant::now();
+
+            for _ in 0..iterations {
+                let mut hasher = LazaHasher::new();
+                unsafe {
+                    // Test SIMD optimized path
+                    hasher.write(&data);
+                }
+                black_box(hasher.finish());
+            }
+
+            let elapsed = start.elapsed();
+            let throughput = (size as f64 * iterations as f64)
+                / (1024.0 * 1024.0 * 1024.0 * elapsed.as_secs_f64());
+
+            println!("{:8} | {:14.2}", size / 1024, throughput);
+        }
+    }
+
+    #[test]
+    fn test_cache_efficiency() {
+        let block_sizes = [64, 128, 256, 512, 1024];
+        let iterations = 1000;
+
+        println!("\nCache Efficiency Test");
+        println!("===================");
+        println!("Block Size | Time (ns/op)");
+
+        for &size in &block_sizes {
+            let data = vec![0x5au8; size];
+            let start = Instant::now();
+
+            for _ in 0..iterations {
+                let mut hasher = LazaHasher::new();
+                // Test cache-friendly access
+                hasher.write(&data);
+                black_box(hasher.finish());
+            }
+
+            let elapsed = start.elapsed();
+            let time_per_op = elapsed.as_nanos() as f64 / iterations as f64;
+
+            println!("{:9} | {:11.1}", size, time_per_op);
         }
     }
 }
