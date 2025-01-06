@@ -13,22 +13,36 @@ Add this to your `Cargo.toml`:
 
 ```toml 
 [dependencies]
-laza = "0.1.2"
+laza = "0.1.3"
 ```
 
 ## Usage
 
 ```rust
 use laza::LazaHasher;
+use std::hash::Hasher;
 
-// Create a new hasher
-let mut hasher = LazaHasher::new();
+fn main() {
+    // Basic usage
+    let mut hasher = LazaHasher::new();
+    hasher.write(b"Hello, World!");
+    let hash = hasher.finish();
+    println!("Hash: {:x}", hash);
 
-// Add data to be hashed
-hasher.write(b"Hello world");
+    // Hash a string
+    let text = "Sample text";
+    let mut hasher = LazaHasher::new();
+    hasher.write(text.as_bytes());
+    let hash = hasher.finish();
+    println!("String hash: {:x}", hash);
 
-// Get the hash result
-let hash = hasher.finish();
+    // Hash a file
+    let data = std::fs::read("example.txt").unwrap();
+    let mut hasher = LazaHasher::new();
+    hasher.write(&data);
+    let hash = hasher.finish();
+    println!("File hash: {:x}", hash);
+}
 ```
 
 ## Parallel Processing
