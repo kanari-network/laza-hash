@@ -97,8 +97,8 @@ mod tests {
             .unwrap();
 
         // Test parameters
-        let sizes = [1, 16, 64, 256, 1024];
-        let iterations = 5_000;
+        let sizes = [1, 16, 64, 256, 1024, 102400];
+        let iterations = 10_000;
         let runs = 5;
         let batch_size = 100;
 
