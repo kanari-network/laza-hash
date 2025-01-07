@@ -28,6 +28,19 @@ const LAZA_IV: [u32; 32] = [
     0xD6D0E7F7, 0xA5D39983, 0x8C6F5171, 0x4A46D1B0
 ];
 
+const SIGMA: [[usize; 16]; 10] = [
+    [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 ],
+    [ 14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3 ],
+    [ 11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4 ],
+    [ 7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8 ],
+    [ 9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13 ],
+    [ 2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9 ],
+    [ 12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11 ],
+    [ 13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10 ],
+    [ 6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5 ],
+    [ 10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0 ],
+];
+
 const STATE_SIZE: usize = 32;  // Increased from 16
 const SALT_SIZE: usize = 32;
 const KEY_SIZE: usize = 16;    // Increased from 8
@@ -57,90 +70,51 @@ pub struct LazaHasher {
     is_keyed: bool,
 }
 
-const DOMAIN_HASH: u32 = 0x01;
-const DOMAIN_KEYED: u32 = 0x02;
-
 impl LazaHasher {
+    #[inline(always)]
+    fn g(&mut self, a: usize, b: usize, c: usize, d: usize, x: u32, y: u32) {
+        self.state[a] = self.state[a].wrapping_add(self.state[b]).wrapping_add(x);
+        self.state[d] = (self.state[d] ^ self.state[a]).rotate_right(16);
+        self.state[c] = self.state[c].wrapping_add(self.state[d]);
+        self.state[b] = (self.state[b] ^ self.state[c]).rotate_right(12);
+        self.state[a] = self.state[a].wrapping_add(self.state[b]).wrapping_add(y);
+        self.state[d] = (self.state[d] ^ self.state[a]).rotate_right(8);
+        self.state[c] = self.state[c].wrapping_add(self.state[d]);
+        self.state[b] = (self.state[b] ^ self.state[c]).rotate_right(7);
+    }
+
     fn compress(&mut self) {
-        let mut working_state = self.state;
+        let mut v = [0u32; 16];
+        v[..8].copy_from_slice(&self.state[..8]);
+        v[8..].copy_from_slice(&LAZA_IV[..8]);
 
-        // Enhanced domain separation with better mixing
-        working_state[0] ^= if self.is_keyed {
-            DOMAIN_KEYED.wrapping_mul(0x6A09E667)
-        } else {
-            DOMAIN_HASH.wrapping_mul(0xBB67AE85)
-        };
-
-        // Mix message length with counter
-        working_state[12] ^= (self.counter & 0xFFFFFFFF) as u32;
-        working_state[13] ^= (self.counter >> 32) as u32;
-        working_state[14] ^= (self.buffer.len() as u32).rotate_left(16);
-
-        // Process message with constant-time operations
+        let mut m = [0u32; 16];
         for i in 0..16 {
-            let word = if i * 4 + 3 < self.buffer.len() {
-                u32::from_le_bytes(self.buffer[i * 4..i * 4 + 4].try_into().unwrap())
-            } else {
-                0u32
-            };
-            working_state[i] = working_state[i].wrapping_add(word);
+            m[i] = u32::from_le_bytes(self.buffer[i*4..(i+1)*4].try_into().unwrap());
         }
 
-        // Mix in salt
+        for i in 0..self.rounds {
+            let s = &SIGMA[i % 10];
+            // Column steps
+            self.g(0, 4, 8, 12, m[s[0]], m[s[1]]);
+            self.g(1, 5, 9, 13, m[s[2]], m[s[3]]);
+            self.g(2, 6, 10, 14, m[s[4]], m[s[5]]);
+            self.g(3, 7, 11, 15, m[s[6]], m[s[7]]);
+            // Diagonal steps
+            self.g(0, 5, 10, 15, m[s[8]], m[s[9]]);
+            self.g(1, 6, 11, 12, m[s[10]], m[s[11]]);
+            self.g(2, 7, 8, 13, m[s[12]], m[s[13]]);
+            self.g(3, 4, 9, 14, m[s[14]], m[s[15]]);
+        }
+
         for i in 0..8 {
-            working_state[i] ^= u32::from_le_bytes(self.salt[i * 4..i * 4 + 4].try_into().unwrap());
-        }
-
-        // Improved key mixing for MAC mode
-        if self.is_keyed {
-            for i in 0..8 {
-                working_state[i] = working_state[i]
-                    .wrapping_add(self.key[i])
-                    .rotate_right(11)
-                    .wrapping_mul(0x9e3779b9);
-            }
-        }
-
-        // Enhanced round function with round constants
-        for r in 0..self.rounds {
-            working_state[0] ^= r as u32; // Round constant
-
-            // Column mixing with additional rotations
-            for i in 0..4 {
-                working_state[i] = working_state[i]
-                    .wrapping_add(working_state[i + 4])
-                    .rotate_right(7);
-                working_state[i + 8] ^= working_state[i];
-                working_state[i + 12] = working_state[i + 12]
-                    .wrapping_add(working_state[i + 8])
-                    .rotate_right(8);
-            }
-
-            // Diagonal mixing with stronger permutation
-            for i in 0..4 {
-                working_state[i] = working_state[i]
-                    .wrapping_add(working_state[((i + 1) % 4) + 8])
-                    .rotate_right(12);
-                working_state[i + 4] ^= working_state[i];
-                working_state[i + 8] = working_state[i + 8]
-                    .wrapping_add(working_state[i + 4])
-                    .rotate_right(16);
-            }
-        }
-
-        // Stronger state update with additional mixing
-        for i in 0..16 {
-            self.state[i] = self.state[i]
-                .wrapping_add(working_state[i])
-                .rotate_right(i as u32 & 0x1F);
+            self.state[i] ^= v[i] ^ v[i + 8];
         }
 
         self.buffer.clear();
         self.counter = self.counter.wrapping_add(1);
-
-        // Secure cleanup
-        working_state.zeroize();
     }
+
 
     pub fn new() -> Self {
         let mut salt = [0u8; SALT_SIZE];
