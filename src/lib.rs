@@ -143,8 +143,24 @@ mod avx2 {
 impl LazaHasher {
     pub fn new_with_salt(salt: u64) -> Self {
         let mut hasher = Self::new();
-        hasher.state[0] ^= salt as u32;
-        hasher.state[1] ^= (salt >> 32) as u32;
+        
+        // Mix salt into initial state
+        let salt_bytes = salt.to_le_bytes();
+        for i in 0..8 {
+            hasher.state[i] ^= u32::from_le_bytes([
+                salt_bytes[i % 8],
+                salt_bytes[(i + 1) % 8],
+                salt_bytes[(i + 2) % 8],
+                salt_bytes[(i + 3) % 8]
+            ]);
+        }
+
+        // Additional state mixing
+        for i in 0..STATE_SIZE {
+            hasher.state[i] = hasher.state[i].wrapping_mul(0x6a09e667);
+            hasher.state[i] = hasher.state[i].rotate_right(i as u32 + 1);
+        }
+        
         hasher
     }
 
@@ -270,28 +286,22 @@ impl LazaHasher {
 
     fn finalize(&mut self) -> u64 {
         if !self.buffer.is_empty() {
-            let orig_len = self.buffer.len();
-            self.buffer.resize(BLOCK_SIZE, 0);
-            self.buffer[orig_len] = 0x80;
-
-            // Add length encoding
-            let total_bits = (self.counter * BLOCK_SIZE as u64 + orig_len as u64) * 8;
-            self.buffer[BLOCK_SIZE - 16..BLOCK_SIZE - 8].copy_from_slice(&total_bits.to_le_bytes());
-
             self.compress();
         }
 
-        // Additional finalization mixing
-        self.state[14] ^= (self.counter << 3) as u32;
-        self.state[15] ^= if self.is_keyed {
-            0x6a09e667
-        } else {
-            0xbb67ae85
-        };
+        // Enhanced finalization mixing
+        for i in 0..4 {
+            let t = self.state[i].wrapping_add(self.state[i + 4]);
+            self.state[i + 8] ^= t.rotate_left(i as u32 * 7 + 1);
+        }
 
-        // Output masking
-        let mask = 0x243f6a88_85a308d3u64;
-        ((self.state[0] as u64) << 32 | (self.state[1] as u64)) ^ mask
+        // Avalanche
+        let mut h = self.state[0].wrapping_mul(0x85ebca6b);
+        h ^= h >> 13;
+        h = h.wrapping_mul(0xc2b2ae35);
+        h ^= h >> 16;
+        
+        ((h as u64) << 32) | (self.state[1] as u64)
     }
 }
 
