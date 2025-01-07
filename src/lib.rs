@@ -141,6 +141,13 @@ mod avx2 {
 }
 
 impl LazaHasher {
+    pub fn new_with_salt(salt: u64) -> Self {
+        let mut hasher = Self::new();
+        hasher.state[0] ^= salt as u32;
+        hasher.state[1] ^= (salt >> 32) as u32;
+        hasher
+    }
+
     pub fn write(&mut self, bytes: &[u8]) {
         if bytes.len() > CHUNK_SIZE {
             let chunks: Vec<_> = bytes.par_chunks(CHUNK_SIZE).collect();
