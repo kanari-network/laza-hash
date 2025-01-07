@@ -1,5 +1,8 @@
 use rand::{Rng, thread_rng};
-use rayon::{iter::{IntoParallelRefIterator, ParallelIterator}, slice::ParallelSlice};
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    slice::ParallelSlice,
+};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 use std::hash::Hasher;
@@ -35,7 +38,7 @@ const SALT_SIZE: usize = 32;
 const KEY_SIZE: usize = 16; // Increased from 8
 
 const CHUNK_SIZE: usize = 16384; // 16KB chunks for parallel processing
-const CACHE_LINE: usize = 64;    // Common cache line size
+
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct LazaHasher {
@@ -64,22 +67,18 @@ pub struct LazaHasher {
 #[cfg(target_arch = "x86_64")]
 mod simd {
     use super::*;
-    
-    #[cfg(target_feature = "avx512f")]
-    pub(crate) unsafe fn compress_avx512(state: &mut [u32; STATE_SIZE], chunks: &[&[u8]]) -> bool {
-        // AVX-512 implementation
-        unimplemented!()
-    }
 
     #[target_feature(enable = "avx2")]
     pub(crate) unsafe fn compress_avx2(state: &mut [u32; STATE_SIZE], chunks: &[&[u8]]) -> bool {
-        if chunks.is_empty() { return false; }
+        if chunks.is_empty() {
+            return false;
+        }
 
         unsafe {
             let mut acc0 = _mm256_loadu_si256(state[0..8].as_ptr() as *const __m256i);
-            let mut acc1 = _mm256_loadu_si256(state[8..16].as_ptr() as *const __m256i);
-            let mut acc2 = _mm256_loadu_si256(state[16..24].as_ptr() as *const __m256i);
-            let mut acc3 = _mm256_loadu_si256(state[24..32].as_ptr() as *const __m256i);
+            let acc1 = _mm256_loadu_si256(state[8..16].as_ptr() as *const __m256i);
+            let acc2 = _mm256_loadu_si256(state[16..24].as_ptr() as *const __m256i);
+            let acc3 = _mm256_loadu_si256(state[24..32].as_ptr() as *const __m256i);
 
             for chunk in chunks {
                 let chunk_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
@@ -99,7 +98,6 @@ mod simd {
 #[cfg(target_arch = "x86_64")]
 mod avx2 {
     use super::*;
-    use std::arch::x86_64::*;
 
     /// Safety: Requires AVX2 support and properly aligned state/buffer
     #[target_feature(enable = "avx2")]
@@ -122,7 +120,7 @@ mod avx2 {
             let working_vec3 = _mm256_loadu_si256(state[24..32].as_ptr() as *const __m256i);
 
             let mut result_vec0 = working_vec0;
-            
+
             // Process blocks
             for block in &msg_blocks {
                 let msg_vec = _mm256_loadu_si256(block.as_ptr() as *const __m256i);
@@ -143,7 +141,7 @@ mod avx2 {
 impl LazaHasher {
     pub fn new_with_salt(salt: u64) -> Self {
         let mut hasher = Self::new();
-        
+
         // Mix salt into initial state
         let salt_bytes = salt.to_le_bytes();
         for i in 0..8 {
@@ -151,7 +149,7 @@ impl LazaHasher {
                 salt_bytes[i % 8],
                 salt_bytes[(i + 1) % 8],
                 salt_bytes[(i + 2) % 8],
-                salt_bytes[(i + 3) % 8]
+                salt_bytes[(i + 3) % 8],
             ]);
         }
 
@@ -160,53 +158,47 @@ impl LazaHasher {
             hasher.state[i] = hasher.state[i].wrapping_mul(0x6a09e667);
             hasher.state[i] = hasher.state[i].rotate_right(i as u32 + 1);
         }
-        
+
         hasher
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
         if bytes.len() > CHUNK_SIZE {
-            // Process large inputs in parallel chunks
-            let chunks: Vec<_> = bytes.chunks(CHUNK_SIZE).collect();
-            
-            #[cfg(target_arch = "x86_64")]
-            if is_x86_feature_detected!("avx2") {
-                // SIMD processing
-                let states: Vec<[u32; STATE_SIZE]> = chunks
-                    .iter()
-                    .map(|chunk| {
-                        let mut state = self.state;
-                        unsafe {
-                            avx2::compress_avx2(&mut state, chunk);
-                        }
-                        state
-                    })
-                    .collect();
-    
-                // Combine results
-                self.state = states.into_iter().fold(self.state, |acc, state| {
-                    let mut result = acc;
-                    for i in 0..STATE_SIZE {
-                        result[i] = result[i].wrapping_add(state[i]);
+            let chunks: Vec<_> = bytes.par_chunks(CHUNK_SIZE).collect();
+            let states: Vec<[u32; STATE_SIZE]> = chunks
+                .par_iter()
+                .map(|chunk| {
+                    let mut state = self.state;
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        if is_x86_feature_detected!("avx512f") && cfg!(target_feature = "avx512f") {
+                            simd::compress_avx2(&mut state, &[chunk]);
+                        } else if is_x86_feature_detected!("avx2") {
+                            simd::compress_avx2(&mut state, &[chunk]);
+                        } 
                     }
-                    result
-                });
-            } else {
-                // Fallback for non-SIMD
-                for chunk in chunks {
-                    self.buffer.extend_from_slice(chunk);
-                    if self.buffer.len() >= BLOCK_SIZE {
-                        self.compress();
-                    }
-                }
-            }
-        } else {
-            // Process small inputs directly
-            self.buffer.extend_from_slice(bytes);
-            if self.buffer.len() >= BLOCK_SIZE {
-                self.compress();
+
+                    state
+                })
+                .collect();
+
+            // Combine states using SIMD when available
+            self.state = Self::combine_states(&self.state, &states);
+        } 
+    }
+
+    #[inline]
+    fn combine_states(
+        initial: &[u32; STATE_SIZE],
+        states: &[[u32; STATE_SIZE]],
+    ) -> [u32; STATE_SIZE] {
+        let mut result = *initial;
+        for state in states {
+            for (a, b) in result.iter_mut().zip(state.iter()) {
+                *a = a.wrapping_add(*b);
             }
         }
+        result
     }
 
     #[inline(always)]
@@ -232,7 +224,7 @@ impl LazaHasher {
         } else {
             self.compress_scalar();
         }
-        
+
         self.buffer.clear();
         self.counter = self.counter.wrapping_add(1);
     }
@@ -240,7 +232,7 @@ impl LazaHasher {
     #[inline(always)]
     fn compress_scalar(&mut self) {
         let mut m = [0u32; 16];
-        
+
         // Vectorized buffer loading
         let mut ptr = self.buffer.as_ptr();
         unsafe {
@@ -254,21 +246,27 @@ impl LazaHasher {
         // Unrolled rounds
         for i in 0..self.rounds {
             let s = &SIGMA[i % 10];
-            
+
             // Unrolled quarter rounds
             for j in 0..4 {
                 let base = j * 4;
-                self.g(base, base+1, base+2, base+3, 
-                      m[s[j*2]], m[s[j*2+1]]);
+                self.g(
+                    base,
+                    base + 1,
+                    base + 2,
+                    base + 3,
+                    m[s[j * 2]],
+                    m[s[j * 2 + 1]],
+                );
             }
         }
 
         // Optimized feed-forward
         for i in (0..8).step_by(4) {
-            self.state[i] ^= self.state[i+8];
-            self.state[i+1] ^= self.state[i+9];
-            self.state[i+2] ^= self.state[i+10];
-            self.state[i+3] ^= self.state[i+11];
+            self.state[i] ^= self.state[i + 8];
+            self.state[i + 1] ^= self.state[i + 9];
+            self.state[i + 2] ^= self.state[i + 10];
+            self.state[i + 3] ^= self.state[i + 11];
         }
     }
 
@@ -297,22 +295,28 @@ impl LazaHasher {
 
     fn finalize(&mut self) -> u64 {
         if !self.buffer.is_empty() {
+            let orig_len = self.buffer.len();
+            self.buffer.resize(BLOCK_SIZE, 0);
+            self.buffer[orig_len] = 0x80;
+
+            // Add length encoding
+            let total_bits = (self.counter * BLOCK_SIZE as u64 + orig_len as u64) * 8;
+            self.buffer[BLOCK_SIZE - 16..BLOCK_SIZE - 8].copy_from_slice(&total_bits.to_le_bytes());
+
             self.compress();
         }
 
-        // Enhanced finalization mixing
-        for i in 0..4 {
-            let t = self.state[i].wrapping_add(self.state[i + 4]);
-            self.state[i + 8] ^= t.rotate_left(i as u32 * 7 + 1);
-        }
+        // Additional finalization mixing
+        self.state[14] ^= (self.counter << 3) as u32;
+        self.state[15] ^= if self.is_keyed {
+            0x6a09e667
+        } else {
+            0xbb67ae85
+        };
 
-        // Avalanche
-        let mut h = self.state[0].wrapping_mul(0x85ebca6b);
-        h ^= h >> 13;
-        h = h.wrapping_mul(0xc2b2ae35);
-        h ^= h >> 16;
-        
-        ((h as u64) << 32) | (self.state[1] as u64)
+        // Output masking
+        let mask = 0x243f6a88_85a308d3u64;
+        ((self.state[0] as u64) << 32 | (self.state[1] as u64)) ^ mask
     }
 }
 
@@ -413,7 +417,7 @@ impl LazaHash {
 
     fn compress(&mut self) {
         let mut working_state = self.state;
-    
+
         #[cfg(target_arch = "x86_64")]
         if is_x86_feature_detected!("avx2") {
             unsafe {
@@ -423,20 +427,23 @@ impl LazaHash {
                         let idx = i * 4;
                         let values = _mm256_setr_epi32(
                             working_state[idx] as i32,
-                            working_state[idx + 1] as i32, 
+                            working_state[idx + 1] as i32,
                             working_state[idx + 2] as i32,
                             working_state[idx + 3] as i32,
-                            0, 0, 0, 0
+                            0,
+                            0,
+                            0,
+                            0,
                         );
-    
+
                         // Vectorized quarter round
                         let added = _mm256_add_epi32(values, _mm256_srli_epi32(values, 16));
                         let mixed = _mm256_xor_si256(added, _mm256_srli_epi32(values, 12));
                         let rotated = _mm256_or_si256(
                             _mm256_slli_epi32(mixed, 16),
-                            _mm256_srli_epi32(mixed, 16)
+                            _mm256_srli_epi32(mixed, 16),
                         );
-    
+
                         // Store results
                         let mut result = [0i32; 8];
                         _mm256_storeu_si256(result.as_mut_ptr() as *mut __m256i, rotated);
@@ -444,7 +451,7 @@ impl LazaHash {
                             working_state[idx + j] = result[j] as u32;
                         }
                     }
-    
+
                     // Diagonal rounds using permutation
                     let perm = SIGMA[round % 10];
                     for i in 0..4 {
@@ -454,7 +461,7 @@ impl LazaHash {
                             perm[idx],
                             perm[idx + 1],
                             perm[idx + 2],
-                            perm[idx + 3]
+                            perm[idx + 3],
                         );
                     }
                 }
@@ -466,7 +473,7 @@ impl LazaHash {
                     let idx = i * 4;
                     Self::quarter_round(&mut working_state, idx, idx + 1, idx + 2, idx + 3);
                 }
-    
+
                 let perm = SIGMA[round % 10];
                 for i in 0..4 {
                     let idx = i * 4;
@@ -475,12 +482,12 @@ impl LazaHash {
                         perm[idx],
                         perm[idx + 1],
                         perm[idx + 2],
-                        perm[idx + 3]
+                        perm[idx + 3],
                     );
                 }
             }
         }
-    
+
         // Feed-forward with bounds check
         debug_assert!(working_state.len() >= STATE_SIZE);
         for i in 0..STATE_SIZE {
