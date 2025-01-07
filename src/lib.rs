@@ -166,37 +166,48 @@ impl LazaHasher {
 
     pub fn write(&mut self, bytes: &[u8]) {
         if bytes.len() > CHUNK_SIZE {
-            let chunks: Vec<_> = bytes.par_chunks(CHUNK_SIZE).collect();
-            let mut states: Vec<[u32; STATE_SIZE]> = chunks
-                .par_iter()
-                .map(|chunk| {
-                    let mut state = self.state;
-                    unsafe {
-                        if is_x86_feature_detected!("avx512f") && cfg!(target_feature = "avx512f") {
-                            simd::compress_avx2(&mut state, &[chunk]);
-                        } else if is_x86_feature_detected!("avx2") {
-                            simd::compress_avx2(&mut state, &[chunk]); 
+            // Process large inputs in parallel chunks
+            let chunks: Vec<_> = bytes.chunks(CHUNK_SIZE).collect();
+            
+            #[cfg(target_arch = "x86_64")]
+            if is_x86_feature_detected!("avx2") {
+                // SIMD processing
+                let states: Vec<[u32; STATE_SIZE]> = chunks
+                    .iter()
+                    .map(|chunk| {
+                        let mut state = self.state;
+                        unsafe {
+                            avx2::compress_avx2(&mut state, chunk);
                         }
+                        state
+                    })
+                    .collect();
+    
+                // Combine results
+                self.state = states.into_iter().fold(self.state, |acc, state| {
+                    let mut result = acc;
+                    for i in 0..STATE_SIZE {
+                        result[i] = result[i].wrapping_add(state[i]);
                     }
-                    #[cfg(target_arch = "x86_64")]
-                    state
-                })
-                .collect();
-
-            // Combine chunk results
-            self.state = states.into_iter().fold(self.state, |acc, state| {
-                let mut result = acc;
-                for (a, b) in result.iter_mut().zip(state.iter()) {
-                    *a = a.wrapping_add(*b);
+                    result
+                });
+            } else {
+                // Fallback for non-SIMD
+                for chunk in chunks {
+                    self.buffer.extend_from_slice(chunk);
+                    if self.buffer.len() >= BLOCK_SIZE {
+                        self.compress();
+                    }
                 }
-                result
-            });
+            }
         } else {
-            // Original processing for small inputs
-            // ...existing code...
+            // Process small inputs directly
+            self.buffer.extend_from_slice(bytes);
+            if self.buffer.len() >= BLOCK_SIZE {
+                self.compress();
+            }
         }
     }
-
 
     #[inline(always)]
     fn g(&mut self, a: usize, b: usize, c: usize, d: usize, x: u32, y: u32) {
