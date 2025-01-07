@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "laza"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "blake3",
  "criterion",
