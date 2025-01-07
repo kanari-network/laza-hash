@@ -23,25 +23,33 @@ use laza::LazaHasher;
 use std::hash::Hasher;
 
 fn main() {
-    // Basic usage
-    let mut hasher = LazaHasher::new();
-    hasher.write(b"Hello, World!");
-    let hash = hasher.finish();
-    println!("Hash: {:x}", hash);
+    // Test 1: Basic string with salt
+    let mut hasher = LazaHasher::new_with_salt(1234);
+    hasher.write(b"Test data 1");
+    let hash1 = hasher.finish();
+    println!("\n=== Test 1: Basic string ===");
+    println!("Input: Test data 1");
+    println!("Salt: 1234");
+    println!("Hash: {:016x}", hash1);
 
-    // Hash a string
-    let text = "Sample text";
-    let mut hasher = LazaHasher::new();
+    // Test 2: Same string, different salt
+    let mut hasher = LazaHasher::new_with_salt(5678);
+    hasher.write(b"Test data 1");
+    let hash2 = hasher.finish();
+    println!("\n=== Test 2: Same string, different salt ===");
+    println!("Input: Test data 1");
+    println!("Salt: 5678"); 
+    println!("Hash: {:016x}", hash2);
+
+    // Test 3: Different string, same salt
+    let text = "Different test data";
+    let mut hasher = LazaHasher::new_with_salt(5678);
     hasher.write(text.as_bytes());
-    let hash = hasher.finish();
-    println!("String hash: {:x}", hash);
-
-    // Hash a file
-    let data = std::fs::read("example.txt").unwrap();
-    let mut hasher = LazaHasher::new();
-    hasher.write(&data);
-    let hash = hasher.finish();
-    println!("File hash: {:x}", hash);
+    let hash3 = hasher.finish();
+    println!("\n=== Test 3: Different string ===");
+    println!("Input: {}", text);
+    println!("Salt: 5678");
+    println!("Hash: {:016x}", hash3);
 }
 ```
 
