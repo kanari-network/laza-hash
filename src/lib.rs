@@ -1,6 +1,6 @@
 use rand::{Rng, thread_rng};
 use rayon::{
-    iter::{IntoParallelRefIterator, ParallelIterator},
+    iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
     slice::ParallelSlice,
 };
 #[cfg(target_arch = "x86_64")]
@@ -167,24 +167,67 @@ impl LazaHasher {
             let chunks: Vec<_> = bytes.par_chunks(CHUNK_SIZE).collect();
             let states: Vec<[u32; STATE_SIZE]> = chunks
                 .par_iter()
-                .map(|chunk| {
+                .enumerate()  // Add position information
+                .map(|(idx, chunk)| {
                     let mut state = self.state;
+                    
                     #[cfg(target_arch = "x86_64")]
                     unsafe {
                         if is_x86_feature_detected!("avx512f") && cfg!(target_feature = "avx512f") {
-                            simd::compress_avx2(&mut state, &[chunk]);
+                            simd::compress_avx2(&mut state, &[chunk]);  // Fix: Use proper AVX512
                         } else if is_x86_feature_detected!("avx2") {
                             simd::compress_avx2(&mut state, &[chunk]);
-                        } 
+                        } else {
+                            Self::compress_fallback(chunk, &mut state);
+                        }
                     }
-
+                    
+                    #[cfg(not(target_arch = "x86_64"))]
+                    Self::compress_fallback(chunk, &mut state);
+    
+                    // Mix chunk position into state
+                    state[0] = state[0].wrapping_add(idx as u32);
+                    state[1] ^= state[0].rotate_left(13);
+                    
                     state
                 })
                 .collect();
-
-            // Combine states using SIMD when available
-            self.state = Self::combine_states(&self.state, &states);
-        } 
+    
+            // Enhanced state combination
+            let mut final_state = self.state;
+            for (idx, state) in states.iter().enumerate() {
+                for i in 0..STATE_SIZE {
+                    final_state[i] = final_state[i]
+                        .wrapping_add(state[i])
+                        .rotate_left(11)
+                        .wrapping_mul(0x9e3779b9)
+                        .wrapping_add(idx as u32);
+                }
+            }
+            
+            // Finalization mix
+            for i in 0..STATE_SIZE {
+                final_state[i] = final_state[i]
+                    .wrapping_mul(0x85ebca77)
+                    .rotate_left(17)
+                    .wrapping_mul(0xc2b2ae35);
+            }
+            
+            self.state = final_state;
+        } else {
+            Self::compress_fallback(bytes, &mut self.state);
+        }
+    }
+    
+    #[inline(always)]
+    fn compress_fallback(input: &[u8], state: &mut [u32; STATE_SIZE]) {
+        for (i, &byte) in input.iter().enumerate() {
+            let idx = i % STATE_SIZE;
+            state[idx] = state[idx]
+                .rotate_left(7)
+                .wrapping_add(byte as u32)
+                .wrapping_mul(0x9e3779b9);
+        }
     }
 
     #[inline]

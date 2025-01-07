@@ -13,7 +13,7 @@ Add this to your `Cargo.toml`:
 
 ```toml 
 [dependencies]
-laza = "0.2.3"
+laza = "0.2.4"
 ```
 
 ## Usage
