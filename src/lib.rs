@@ -10,41 +10,28 @@ const BLOCK_SIZE: usize = 128;
 const ROUNDS: usize = 12;
 
 const LAZA_IV: [u32; 32] = [
-    
-    0x61707865, 0x3320646E, 0x79622D32, 0x6B206574,
-    
-    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-    
-    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-    
-    0x9E3779B9, 0x243F6A88, 0xB7E15162, 0x71374491,
-    
-    0xF1234567, 0xE89ABCDF, 0xD6789ABC, 0xC4567DEF,
-    
-    0x7FFFFFFF, 0x1FFFFFFF, 0x0FFFFFFF, 0x07FFFFFF,
-    
-    0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC,
-    
-    0xD6D0E7F7, 0xA5D39983, 0x8C6F5171, 0x4A46D1B0
+    0x61707865, 0x3320646E, 0x79622D32, 0x6B206574, 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
+    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x9E3779B9, 0x243F6A88, 0xB7E15162, 0x71374491,
+    0xF1234567, 0xE89ABCDF, 0xD6789ABC, 0xC4567DEF, 0x7FFFFFFF, 0x1FFFFFFF, 0x0FFFFFFF, 0x07FFFFFF,
+    0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC, 0xD6D0E7F7, 0xA5D39983, 0x8C6F5171, 0x4A46D1B0,
 ];
 
 const SIGMA: [[usize; 16]; 10] = [
-    [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 ],
-    [ 14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3 ],
-    [ 11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4 ],
-    [ 7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8 ],
-    [ 9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13 ],
-    [ 2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9 ],
-    [ 12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11 ],
-    [ 13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10 ],
-    [ 6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5 ],
-    [ 10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0 ],
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+    [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
+    [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
+    [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
+    [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
+    [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
+    [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
+    [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
+    [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
 ];
 
-const STATE_SIZE: usize = 32;  // Increased from 16
+const STATE_SIZE: usize = 32; // Increased from 16
 const SALT_SIZE: usize = 32;
-const KEY_SIZE: usize = 16;    // Increased from 8
-
+const KEY_SIZE: usize = 16; // Increased from 8
 
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct LazaHasher {
@@ -90,7 +77,7 @@ impl LazaHasher {
 
         let mut m = [0u32; 16];
         for i in 0..16 {
-            m[i] = u32::from_le_bytes(self.buffer[i*4..(i+1)*4].try_into().unwrap());
+            m[i] = u32::from_le_bytes(self.buffer[i * 4..(i + 1) * 4].try_into().unwrap());
         }
 
         for i in 0..self.rounds {
@@ -115,12 +102,11 @@ impl LazaHasher {
         self.counter = self.counter.wrapping_add(1);
     }
 
-
     pub fn new() -> Self {
         let mut salt = [0u8; SALT_SIZE];
         thread_rng().fill(&mut salt);
         Self {
-            state: LAZA_IV,  // Now matches 32-word size
+            state: LAZA_IV, // Now matches 32-word size
             buffer: Vec::with_capacity(BLOCK_SIZE),
             counter: 0,
             salt,
@@ -165,7 +151,6 @@ impl LazaHasher {
         ((self.state[0] as u64) << 32 | (self.state[1] as u64)) ^ mask
     }
 }
-
 
 // Add constant-time comparison
 impl PartialEq for LazaHasher {
@@ -224,3 +209,171 @@ unsafe fn add_vectors_avx2(a: &[f32], b: &[f32]) -> Vec<f32> {
     result
 }
 
+#[derive(Debug, Clone)]
+pub struct LazaHash {
+    state: [u32; STATE_SIZE],
+    buffer: [u8; BLOCK_SIZE],
+    salt: [u32; SALT_SIZE / 4],
+    count: u64,
+    buflen: usize,
+}
+
+impl LazaHash {
+    fn quarter_round(state: &mut [u32], a: usize, b: usize, c: usize, d: usize) {
+        // Create a temporary array to store values
+        let mut tmp = [state[a], state[b], state[c], state[d]];
+
+        // Perform operations on the temporary array
+        tmp[0] = tmp[0].wrapping_add(tmp[1]);
+        tmp[3] ^= tmp[0];
+        tmp[3] = tmp[3].rotate_right(16);
+
+        tmp[2] = tmp[2].wrapping_add(tmp[3]);
+        tmp[1] ^= tmp[2];
+        tmp[1] = tmp[1].rotate_right(12);
+
+        tmp[0] = tmp[0].wrapping_add(tmp[1]);
+        tmp[3] ^= tmp[0];
+        tmp[3] = tmp[3].rotate_right(8);
+
+        tmp[2] = tmp[2].wrapping_add(tmp[3]);
+        tmp[1] ^= tmp[2];
+        tmp[1] = tmp[1].rotate_right(7);
+
+        // Write back results
+        state[a] = tmp[0];
+        state[b] = tmp[1];
+        state[c] = tmp[2];
+        state[d] = tmp[3];
+    }
+
+    fn compress(&mut self) {
+        let mut working_state = self.state;
+    
+        #[cfg(target_arch = "x86_64")]
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                for round in 0..ROUNDS {
+                    // Process 4 quarter rounds at once using AVX2
+                    for i in 0..4 {
+                        let idx = i * 4;
+                        let values = _mm256_setr_epi32(
+                            working_state[idx] as i32,
+                            working_state[idx + 1] as i32, 
+                            working_state[idx + 2] as i32,
+                            working_state[idx + 3] as i32,
+                            0, 0, 0, 0
+                        );
+    
+                        // Vectorized quarter round
+                        let added = _mm256_add_epi32(values, _mm256_srli_epi32(values, 16));
+                        let mixed = _mm256_xor_si256(added, _mm256_srli_epi32(values, 12));
+                        let rotated = _mm256_or_si256(
+                            _mm256_slli_epi32(mixed, 16),
+                            _mm256_srli_epi32(mixed, 16)
+                        );
+    
+                        // Store results
+                        let mut result = [0i32; 8];
+                        _mm256_storeu_si256(result.as_mut_ptr() as *mut __m256i, rotated);
+                        for j in 0..4 {
+                            working_state[idx + j] = result[j] as u32;
+                        }
+                    }
+    
+                    // Diagonal rounds using permutation
+                    let perm = SIGMA[round % 10];
+                    for i in 0..4 {
+                        let idx = i * 4;
+                        Self::quarter_round(
+                            &mut working_state,
+                            perm[idx],
+                            perm[idx + 1],
+                            perm[idx + 2],
+                            perm[idx + 3]
+                        );
+                    }
+                }
+            }
+        } else {
+            // Fallback to scalar implementation
+            for round in 0..ROUNDS {
+                for i in 0..4 {
+                    let idx = i * 4;
+                    Self::quarter_round(&mut working_state, idx, idx + 1, idx + 2, idx + 3);
+                }
+    
+                let perm = SIGMA[round % 10];
+                for i in 0..4 {
+                    let idx = i * 4;
+                    Self::quarter_round(
+                        &mut working_state,
+                        perm[idx],
+                        perm[idx + 1],
+                        perm[idx + 2],
+                        perm[idx + 3]
+                    );
+                }
+            }
+        }
+    
+        // Feed-forward with bounds check
+        debug_assert!(working_state.len() >= STATE_SIZE);
+        for i in 0..STATE_SIZE {
+            self.state[i] = self.state[i].wrapping_add(working_state[i]);
+        }
+    }
+}
+
+impl Default for LazaHash {
+    fn default() -> Self {
+        let mut hasher = LazaHash {
+            state: [0u32; STATE_SIZE],
+            buffer: [0u8; BLOCK_SIZE],
+            salt: [0u32; SALT_SIZE / 4],
+            count: 0,
+            buflen: 0,
+        };
+
+        // Initialize state with IV
+        hasher.state.copy_from_slice(&LAZA_IV);
+
+        // Generate random salt
+        let mut rng = thread_rng();
+        for s in hasher.salt.iter_mut() {
+            *s = rng.r#gen();
+        }
+
+        hasher
+    }
+}
+
+impl Drop for LazaHash {
+    fn drop(&mut self) {
+        self.state.zeroize();
+        self.buffer.zeroize();
+        self.salt.zeroize();
+    }
+}
+
+impl Hasher for LazaHash {
+    fn finish(&self) -> u64 {
+        // Combine last two state words for output
+        ((self.state[0] as u64) << 32) | (self.state[1] as u64)
+    }
+
+    fn write(&mut self, input: &[u8]) {
+        for byte in input {
+            self.buffer[self.buflen] = *byte;
+            self.buflen += 1;
+
+            if self.buflen == BLOCK_SIZE {
+                self.compress();
+                self.count += BLOCK_SIZE as u64;
+                self.buflen = 0;
+            }
+        }
+    }
+}
+
+impl ZeroizeOnDrop for LazaHash {}
